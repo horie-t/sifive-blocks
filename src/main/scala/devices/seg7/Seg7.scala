@@ -24,12 +24,10 @@ abstract class Seg7LEDModule(val c: Seg7LEDParams)(implicit val p: Parameters)
 class Seg7LEDPortIO extends Bundle {
   /** 各セグメントの点灯用。0〜7をCAからCGに対応させる事。0の時に点灯、1の時に消灯します。 */
   val cathodes     = Output(UInt(7.W))
-//  val cathodes     = Output(Vec(7, Bool()))
   /** 小数点用。0の時に点灯、1の時に消灯。 */
   val decimalPoint = Output(Bool())
   /** 桁の選択用。0の桁が点灯、１の桁が消灯。 */
   val anodes       = Output(UInt(8.W))
-//  val anodes       = Output(Vec(8, Bool()))
 }
 
 trait HasSeg7LEDTopBundleContents extends Bundle {
@@ -99,8 +97,8 @@ trait HasSeg7LEDTopModuleContents extends MultiIOModule with HasSeg7LEDParameter
 
   val disp_val = RegInit(0.U(32.W))
   val blink = RegInit(false.B)
-  seg7led.io.digits := VecInit(Seq(disp_val(31, 28), disp_val(27, 24), disp_val(23, 20), disp_val(19, 16),
-    disp_val(15, 12), disp_val(11, 8), disp_val(7, 4), disp_val(3, 0)))
+  seg7led.io.digits := VecInit(Seq(disp_val(3, 0), disp_val(7, 4), disp_val(11, 8), disp_val(15, 12),
+    disp_val(19, 16), disp_val(23, 20), disp_val(27, 24), disp_val(31, 28)))
   seg7led.io.blink := blink
   io.port := seg7led.io.seg7led
 
