@@ -3,21 +3,15 @@ package sifive.blocks.devices.vga
 
 import chisel3._
 import chisel3.util._
-import freechips.rocketchip.config.{Field, Parameters}
-import freechips.rocketchip.subsystem.{BaseSubsystem, HasResetVectorWire}
+import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
-
-import java.nio.{ByteBuffer, ByteOrder}
-import java.nio.file.{Files, Paths}
 
 /** Size, location and contents of the VGA. */
 case class VGAParams(
   address: BigInt = 0x10080000,
   size: Int = 0x80000)
-
-case object PeripheryVGAKey extends Field[Seq[VGAParams]]
 
 class TLVGA(val base: BigInt, val size: Int, executable: Boolean = false, beatBytes: Int = 4,
   resources: Seq[Resource] = new SimpleDevice("vga", Seq("horie,vga")).reg("mem"))(implicit p: Parameters) extends LazyModule
@@ -119,18 +113,3 @@ class TLVGA(val base: BigInt, val size: Int, executable: Boolean = false, beatBy
   }
 }
 
-/** Adds a VGA that contains the DTB describing the system's subsystem. */
-trait HasPeripheryVGA { this: BaseSubsystem =>
-  private val vgaParams = p(PeripheryVGAKey)
-
-  val vgas = vgaParams.zipWithIndex.map { case(params, i) =>
-    val name = Some(s"vga_$i")
-    val vga = LazyModule(new TLVGA(params.address, params.size, false, sbus.control_bus.beatBytes))
-    sbus.control_bus.toVariableWidthSlave(name){ vga.node }
-    vga
-  }
-}
-
-trait HasPeripheryVGAModuleImp extends LazyModuleImp {
-  val outer: HasPeripheryVGA
-}
