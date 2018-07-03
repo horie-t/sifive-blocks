@@ -3,6 +3,7 @@ package sifive.blocks.devices.vga
 
 import chisel3._
 import chisel3.util._
+import chisel3.core.withClockAndReset
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
@@ -12,6 +13,44 @@ import freechips.rocketchip.util._
 case class VGAParams(
   address: BigInt = 0x10080000,
   size: Int = 0x80000)
+
+/** VGAポート */
+class VGAPortIO extends Bundle {
+  val clock = Input(Clock())
+  val reset = Input(Bool())
+  val red   = Output(UInt(4.W))
+  val green = Output(UInt(4.W))
+  val blue  = Output(UInt(4.W))
+  val hSync = Output(Bool())
+  val vSync = Output(Bool())
+}
+
+object VGA {
+  val fps         = 60  // 1秒間に60回画面全体を描画
+
+  val hMax        = 800 // 水平方向のピクセル数(非表示期間も含む)
+  val hSyncPeriod = 96  // 水平同期の期間
+  val hBackPorch  = 48  // 水平バックポーチ
+  val hFrontPorch = 16  // 水平フロントポーチ
+
+  val vMax        = 521 // 垂直方向のライン数(非表示期間も含む)
+  val vSyncPeriod = 2   // 垂直同期の期間
+  val vBackPorch  = 33  // 垂直バックポーチ
+  val vFrontPorch = 10  // 垂直フロントポーチ
+  // 仕様上は上記が正しいが、下記にしないとずれるモニタもある。
+  // val vMax        = 512 // 垂直方向のライン数(非表示期間も含む)
+  // val vSyncPeriod = 2   // 垂直同期の期間
+  // val vBackPorch  = 10  // 垂直バックポーチ
+  // val vFrontPorch = 20  // 垂直フロントポーチ
+
+  val hDispMax = hMax - (hSyncPeriod + hBackPorch + hFrontPorch)
+  val vDispMax = vMax - (vSyncPeriod + vBackPorch + vFrontPorch)
+
+  val pxClock = (100000000.0 / fps / vMax / hMax).round.toInt // 1ピクセル分のクロック数
+  val pxMax = hDispMax * vDispMax
+}
+
+import VGA._
 
 class TLVGA(val base: BigInt, val size: Int, executable: Boolean = false, beatBytes: Int = 4,
   resources: Seq[Resource] = new SimpleDevice("vga", Seq("horie,vga")).reg("mem"))(implicit p: Parameters) extends LazyModule
@@ -29,11 +68,18 @@ class TLVGA(val base: BigInt, val size: Int, executable: Boolean = false, beatBy
     beatBytes = beatBytes)))
 
   lazy val module = new LazyModuleImp(this) {
+    val io = IO(new Bundle{
+      val vga = new VGAPortIO
+    })
+
+    /*
+     * CPU - VRAM(ブロックメモリ)読み書き
+     */
     val width = 8 * beatBytes
 
     val (in, edge) = node.in(0)
     val addrBits = edge.addr_hi(in.a.bits.address - base.asUInt())(log2Ceil(size)-1, 0)
-    val mem = Module(new Vram)
+    val vram = Module(new Vram)
 
     // D stage registers from A
     val d_full      = RegInit(false.B)
@@ -99,17 +145,50 @@ class TLVGA(val base: BigInt, val size: Int, executable: Boolean = false, beatBy
     val dat    = Mux(d_wb, d_rmw_data, a_data)
     val mask   = Mux(d_wb, d_rmw_mask, a_mask)
 
-    mem.io.clkb  := clock
-    mem.io.enb   := wen | ren
-    mem.io.web   := Mux(wen, mask, 0.U)
-    mem.io.addrb := addr
-    mem.io.dinb  := dat
-    d_raw_data   := mem.io.doutb
+    vram.io.clka  := clock
+    vram.io.ena   := wen | ren
+    vram.io.wea   := Mux(wen, mask, 0.U)
+    vram.io.addra := addr
+    vram.io.dina  := dat
+    d_raw_data   := vram.io.douta
 
     // Tie off unused channels
     in.b.valid := false.B
     in.c.ready := true.B
     in.e.ready := true.B
+
+    /*
+     * VRAM -> VGA出力
+     */
+    withClockAndReset(io.vga.clock, io.vga.reset) {
+      val (hCount, hEn)   = Counter(true.B, hMax)
+      val (vCount, vEn)   = Counter(hEn, vMax)
+
+      // 表示ピクセルかどうか
+      val pxEnable = (hSyncPeriod + hBackPorch).U <= hCount && hCount < (hMax - hFrontPorch).U &&
+        (vSyncPeriod + vBackPorch).U <= vCount && vCount < (vMax - vFrontPorch).U
+
+      val (vramAddr, wrap) = Counter(pxEnable, pxMax)
+      when (hCount === 0.U && vCount === 0.U) {
+        vramAddr := 0.U
+      }
+
+      // Bポートから読み出して、VGAポートに出力
+      vram.io.clkb := io.vga.clock
+      vram.io.enb := pxEnable
+      vram.io.web := false.B
+      vram.io.addrb := vramAddr
+      vram.io.dinb := 0.U
+      // VRAMからの出力は1Clock遅れるので、pxEnableをRegNextで受けている
+      val pxData = Mux(RegNext(pxEnable, false.B), vram.io.doutb, 0.U)
+
+      io.vga.red   := Cat(pxData(7, 5), pxData(5))
+      io.vga.green := Cat(pxData(4, 2), pxData(2))
+      io.vga.blue  := Cat(pxData(1, 0), pxData(0), pxData(0))
+
+      // VRAMからの出力の遅れに合わせる
+      io.vga.hSync := RegNext(!(hCount < hSyncPeriod.U), true.B)
+      io.vga.vSync := RegNext(!(vCount < vSyncPeriod.U), true.B)
+    }
   }
 }
-

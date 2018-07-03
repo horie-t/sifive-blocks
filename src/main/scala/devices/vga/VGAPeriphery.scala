@@ -11,7 +11,7 @@ import freechips.rocketchip.diplomacy.{LazyModule, LazyModuleImp}
 case object PeripheryVGAKey extends Field[Seq[VGAParams]]
 
 trait HasPeripheryVGA { this: BaseSubsystem =>
-  private val vgaParams = p(PeripheryVGAKey)
+  val vgaParams = p(PeripheryVGAKey)
 
   val vgas = vgaParams.zipWithIndex.map { case(params, i) =>
     val name = Some(s"vga_$i")
@@ -21,6 +21,15 @@ trait HasPeripheryVGA { this: BaseSubsystem =>
   }
 }
 
-trait HasPeripheryVGAModuleImp extends LazyModuleImp {
+trait HasPeripheryVGABundle {
+  val vga: Vec[VGAPortIO]
+}
+
+trait HasPeripheryVGAModuleImp extends LazyModuleImp with HasPeripheryVGABundle {
   val outer: HasPeripheryVGA
+  val vga = IO(Vec(outer.vgaParams.size, new VGAPortIO))
+
+  (vga zip outer.vgas).foreach { case (io, device) =>
+    io <> device.module.io.vga
+  }
 }
